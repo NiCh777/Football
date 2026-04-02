@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ka">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Online Head Football</title>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    
+    <style>
+        body { margin: 0; background: #0a0a0a; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; color: white; font-family: 'Segoe UI', sans-serif; overflow: hidden; touch-action: none; }
+        
+        /* საწყისი მენიუ */
+        #setup-menu { position: absolute; width: 100%; height: 100%; background: #0a0a0a; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; }
+        .menu-btn { padding: 20px 40px; margin: 15px; font-size: 22px; cursor: pointer; border: none; border-radius: 15px; color: white; font-weight: bold; width: 280px; transition: 0.3s; box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
+        #btn-p1 { background: linear-gradient(45deg, #1e3c72, #2a5298); }
+        #btn-p2 { background: linear-gradient(45deg, #cb2d3e, #ef473a); }
+        .menu-btn:active { transform: scale(0.95); }
+
+        /* სათამაშო მოედანი */
+        canvas { background: #1a472a; border: 4px solid #fff; border-radius: 10px; display: none; box-shadow: 0 0 30px rgba(0,0,0,0.5); width: 95vw; max-width: 800px; }
+        #ui { margin-bottom: 15px; font-size: 36px; font-weight: bold; color: #fff; display: none; text-shadow: 0 0 10px rgba(0,0,0,0.5); }
+        
+        /* მართვის ღილაკები */
+        .controls { position: fixed; bottom: 30px; display: none; gap: 30px; width: 100%; justify-content: center; z-index: 10; }
+        .ctrl-btn { width: 75px; height: 75px; font-size: 35px; border-radius: 50%; border: 2px solid #fff; background: rgba(255,255,255,0.1); color: white; outline: none; -webkit-tap-highlight-color: transparent; }
+    </style>
+</head>
+<body>
+
+<div id="setup-menu">
+    <h1 style="color: #00f2fe; margin-bottom: 10px; font-size: 40px;">HEAD FOOTBALL</h1>
+    <p style="color: #888; margin-bottom: 30px;">ონლაინ დუელი</p>
+    <button class="menu-btn" id="btn-p1" onclick="selectRole('p1')">PLAYER 1 (BLUE)</button>
+    <button class="menu-btn" id="btn-p2" onclick="selectRole('p2')">PLAYER 2 (RED)</button>
+    <p style="margin-top: 20px; color: #555; font-size: 14px;">ერთმა აირჩიეთ P1, მეორემ P2</p>
+</div>
+
+<div id="ui">0 : 0</div>
+<canvas id="gameCanvas"></canvas>
+
+<div class="controls" id="game-controls">
+    <button class="ctrl-btn" id="leftBtn">⬅️</button>
+    <button class="ctrl-btn" id="jumpBtn">⬆️</button>
+    <button class="ctrl-btn" id="rightBtn">➡️</button>
+</div>
+
+<script>
+    // === 1. FIREBASE CONFIG (შენი მონაცემები ჩასმულია) ===
+    const firebaseConfig = {
+        apiKey: "AIzaSyDSMrfnR1K19ScIiKov2uYSc_3Yz4DjlpA",
+        authDomain: "football-79702.firebaseapp.com",
+        projectId: "football-79702",
+        databaseURL: "https://football-79702-default-rtdb.firebaseio.com/",
+        storageBucket: "football-79702.firebasestorage.app",
+        messagingSenderId: "611649746367",
+        appId: "1:611649746367:web:641820dc87089377915d0a"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const gameRef = db.ref('match_live');
+
+    // === 2. ცვლადები ===
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 800; canvas.height = 400;
+
+    let playerRole = null;
+    let p1 = { x: 100, y: 340, dy: 0, score: 0 };
+    let p2 = { x: 650, y: 340, dy: 0, score: 0 };
+    let ball = { x: 400, y: 200, dx: 0, dy: 0 };
+
+    function selectRole(role) {
+        playerRole = role;
+        document.getElementById('setup-menu').style.display = 'none';
+        document.getElementById('ui').style.display = 'block';
+        canvas.style.display = 'block';
+        document.getElementById('game-controls').style.display = 'flex';
+        requestAnimationFrame(gameLoop);
+    }
+
+    // === 3. სინქრონიზაცია ბაზასთან ===
+    gameRef.on('value', (snap) => {
+        const data = snap.val();
+        if (!data) return;
+        
+        if (playerRole === 'p1') {
+            if (data.p2) { p2.x = data.p2.x; p2.y = data.p2.y; }
+        } else {
+            if (data.p1) { p1.x = data.p1.x; p1.y = data.p1.y; }
+            if (data.ball) { ball.x = data.ball.x; ball.y = data.ball.y; }
+        }
+        p1.score = data.p1_score || 0;
+        p2.score = data.p2_score || 0;
+        document.getElementById('ui').innerText = `${p1.score} : ${p2.score}`;
+    });
+
+    // === 4. მართვა ===
+    let moveLeft = false, moveRight = false;
+    
+    const startL = () => moveLeft = true;
+    const startR = () => moveRight = true;
+    const stopM = () => { moveLeft = false; moveRight = false; };
+
+    // ღილაკების ივენთები (Touch & Mouse)
+    const lBtn = document.getElementById('leftBtn');
+    const rBtn = document.getElementById('rightBtn');
+    const jBtn = document.getElementById('jumpBtn');
+
+    lBtn.ontouchstart = (e) => { e.preventDefault(); startL(); };
+    rBtn.ontouchstart = (e) => { e.preventDefault(); startR(); };
+    lBtn.ontouchend = stopM;
+    rBtn.ontouchend = stopM;
+    
+    lBtn.onmousedown = startL;
+    rBtn.onmousedown = startR;
+    window.onmouseup = stopM;
+
+    jBtn.onclick = () => {
+        let me = (playerRole === 'p1') ? p1 : p2;
+        if (me.y >= 340) me.dy = -13;
+    };
+
+    // კლავიატურა
+    window.onkeydown = (e) => {
+        if(e.code === 'ArrowLeft' || e.code === 'KeyA') moveLeft = true;
+        if(e.code === 'ArrowRight' || e.code === 'KeyD') moveRight = true;
+        if(e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
+            let me = (playerRole === 'p1') ? p1 : p2;
+            if(me.y >= 340) me.dy = -13;
+        }
+    };
+    window.onkeyup = () => stopM();
+
+    // === 5. მთავარი ციკლი ===
+    function gameLoop() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // ფონი (ხაზები)
+        ctx.strokeStyle = "rgba(255,255,255,0.3)";
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(400,0); ctx.lineTo(400,400); ctx.stroke();
+        ctx.strokeRect(0, 200, 40, 200); ctx.strokeRect(760, 200, 40, 200);
+
+        let me = (playerRole === 'p1') ? p1 : p2;
+        if (moveLeft && me.x > 0) me.x -= 7;
+        if (moveRight && me.x < canvas.width - 50) me.x += 7;
+        
+        me.dy += 0.6;
+        me.y += me.dy;
+        if (me.y > 340) { me.y = 340; me.dy = 0; }
+
+        // P1 აკონტროლებს ბურთს და გოლებს
+        if (playerRole === 'p1') {
+            ball.x += ball.dx; ball.y += ball.dy;
+            ball.dy += 0.3; // ბურთის გრავიტაცია
+
+            // კედლებიდან ასხლეტა
+            if (ball.y > 385) { ball.y = 385; ball.dy *= -0.7; }
+            if (ball.x < 0 || ball.x > 800) {
+                // გოლის შემოწმება
+                if (ball.y > 200) {
+                   if (ball.x < 400) gameRef.child('p2_score').set(p2.score + 1);
+                   else gameRef.child('p1_score').set(p1.score + 1);
+                   ball = { x: 400, y: 150, dx: 0, dy: 0 };
+                } else {
+                   ball.dx *= -1;
+                }
+            }
+
+            // მოთამაშესთან შეხება
+            [p1, p2].forEach(p => {
+                if (ball.x > p.x && ball.x < p.x + 50 && ball.y > p.y && ball.y < p.y + 60) {
+                    ball.dy = -7;
+                    ball.dx = (ball.x - (p.x + 25)) * 0.4;
+                }
+            });
+
+            gameRef.update({ 
+                p1: { x: p1.x, y: p1.y },
+                ball: { x: ball.x, y: ball.y }
+            });
+        } else {
+            gameRef.update({ p2: { x: p2.x, y: p2.y } });
+        }
+
+        // ნახაზი
+        ctx.fillStyle = "#4facfe"; ctx.fillRect(p1.x, p1.y, 50, 60); // Player 1
+        ctx.fillStyle = "#ff4b2b"; ctx.fillRect(p2.x, p2.y, 50, 60); // Player 2
+        ctx.fillStyle = "white"; ctx.beginPath(); ctx.arc(ball.x, ball.y, 12, 0, Math.PI*2); ctx.fill();
+
+        requestAnimationFrame(gameLoop);
+    }
+</script>
+</body>
+</html>
